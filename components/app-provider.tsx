@@ -1,115 +1,67 @@
 'use client';
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { activities as seedActivities, clients as seedClients, contracts as seedContracts, payments as seedPayments, projects as seedProjects } from '@/lib/mock-data';
+import { createContext, FormEvent, useContext, useEffect, useMemo, useState } from 'react';
+import { activities as seedActivities } from '@/lib/mock-data';
 import { Client, Contract, Payment, Project } from '@/lib/types';
+import { getCloudDb } from '@/lib/cloud-db';
 
 type AppContextValue = {
   clients: Client[]; projects: Project[]; payments: Payment[]; contracts: Contract[]; activities: typeof seedActivities;
-  addClient: (client: Client) => void; updateClient: (client: Client) => void; deleteClient: (clientId: string) => void;
-  deleteProject: (projectId: string) => void;
-  addPayment: (payment: Payment) => void; updatePayment: (payment: Payment) => void; deletePayment: (paymentId: string) => void;
-  generatePaymentHistory: (client: Client) => number;
-  addContract: (contract: Contract) => void;
+  addClient: (client: Client) => Promise<Client>; updateClient: (client: Client) => Promise<void>; deleteClient: (clientId: string) => Promise<void>;
+  deleteProject: (projectId: string) => Promise<void>;
+  addPayment: (payment: Payment) => Promise<void>; updatePayment: (payment: Payment) => Promise<void>; deletePayment: (paymentId: string) => Promise<void>;
+  generatePaymentHistory: (client: Client) => Promise<number>;
+  addContract: (contract: Contract) => Promise<void>;
+  signOut: () => Promise<void>;
   totalIncome: number; outstanding: number; recurring: number; activeClients: number;
 };
 const AppContext = createContext<AppContextValue | null>(null);
 const STORAGE_KEY='tai-tracker-v1';
+const OWNER_EMAIL='taido097@gmail.com';
+const db=getCloudDb();
 
-type StoredData={clients:Client[];projects:Project[];payments:Payment[];contracts:Contract[]};
-function nextDueFromPaidThrough(paidThrough:string,billingDay:number){
-  if(!paidThrough) return '';
-  const [y,m]=paidThrough.split('-').map(Number);
-  if(!y||!m) return '';
-  const safeDay=Math.min(28,Math.max(1,billingDay||1));
-  const d=new Date(Date.UTC(y,m,safeDay));
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(safeDay).padStart(2,'0')}`;
+function nextDueFromPaidThrough(paidThrough:string,billingDay:number){if(!paidThrough)return'';const [y,m]=paidThrough.split('-').map(Number);if(!y||!m)return'';const day=Math.min(28,Math.max(1,billingDay||1));const d=new Date(Date.UTC(y,m,day));return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`}
+function normalizeClient(c:Client):Client{const billingDay=Math.min(28,Math.max(1,c.billingDay||Number(c.paidThrough?.slice(8,10))||1));return {...c,billingDay,nextDueDate:c.recurringFee>0&&c.paidThrough?nextDueFromPaidThrough(c.paidThrough,billingDay):c.nextDueDate||''}}
+const dateOrNull=(v:string|undefined)=>v||null;
+const clientFrom=(r:any):Client=>normalizeClient({id:r.id,name:r.name,business:r.business,email:r.email||'',phone:r.phone||'',website:r.website||'',status:r.status,startDate:r.start_date||'',launchDate:r.launch_date||'',package:r.package||'',projectValue:Number(r.project_value||0),recurringFee:Number(r.recurring_fee||0),billingDay:r.billing_day||1,paidThrough:r.paid_through||'',nextDueDate:r.next_due_date||'',notes:r.notes||''});
+const projectFrom=(r:any):Project=>({id:r.id,clientId:r.client_id||'',name:r.name,type:r.type||'',status:r.status,startDate:r.start_date||'',targetLaunchDate:r.target_launch_date||'',price:Number(r.price||0),progress:Number(r.progress||0),notes:r.notes||''});
+const paymentFrom=(r:any):Payment=>({id:r.id,clientId:r.client_id||'',invoice:r.invoice,type:r.type,amountCharged:Number(r.amount_charged||0),amountPaid:Number(r.amount_paid||0),paymentDate:r.payment_date||'',dueDate:r.due_date||'',method:r.method||'',status:r.status,coversThrough:r.covers_through||''});
+const contractFrom=(r:any):Contract=>({id:r.id,clientId:r.client_id||'',name:r.name,signedDate:r.signed_date||'',status:r.status,fileName:r.file_name||''});
+function clientRow(c:Client,ownerId:string){const n=normalizeClient(c);return {owner_id:ownerId,name:n.name,business:n.business,email:n.email,phone:n.phone,website:n.website,status:n.status,start_date:dateOrNull(n.startDate),launch_date:dateOrNull(n.launchDate),package:n.package,project_value:n.projectValue,recurring_fee:n.recurringFee,billing_day:n.billingDay||1,paid_through:dateOrNull(n.paidThrough),next_due_date:dateOrNull(n.nextDueDate),notes:n.notes}}
+function paymentRow(p:Payment,ownerId:string,clientId?:string|null){return {owner_id:ownerId,client_id:clientId===undefined?(p.clientId||null):clientId,invoice:p.invoice,type:p.type,amount_charged:p.amountCharged,amount_paid:p.amountPaid,payment_date:dateOrNull(p.paymentDate),due_date:dateOrNull(p.dueDate),method:p.method,status:p.status,covers_through:dateOrNull(p.coversThrough)}}
+
+export function AppProvider({children}:{children:React.ReactNode}){
+ const [clients,setClients]=useState<Client[]>([]),[projects,setProjects]=useState<Project[]>([]),[payments,setPayments]=useState<Payment[]>([]),[contracts,setContracts]=useState<Contract[]>([]);
+ const [userId,setUserId]=useState(''); const [ready,setReady]=useState(false); const [authError,setAuthError]=useState(''); const [authMsg,setAuthMsg]=useState('');
+ async function loadAll(uid:string){
+   const [c,pay,proj,con]=await Promise.all([db.from('clients').select('*').order('created_at',{ascending:false}),db.from('payments').select('*').order('payment_date',{ascending:false,nullsFirst:false}),db.from('projects').select('*').order('created_at',{ascending:false}),db.from('contracts').select('*').order('created_at',{ascending:false})]);
+   for(const x of [c,pay,proj,con]) if(x.error) throw new Error(x.error.message);
+   if((c.data?.length||0)+(pay.data?.length||0)+(proj.data?.length||0)+(con.data?.length||0)===0) await migrateBrowserData(uid);
+   else {setClients((c.data||[]).map(clientFrom));setPayments((pay.data||[]).map(paymentFrom));setProjects((proj.data||[]).map(projectFrom));setContracts((con.data||[]).map(contractFrom));}
+ }
+ async function migrateBrowserData(uid:string){
+   const raw=localStorage.getItem(STORAGE_KEY); if(!raw){setClients([]);setProjects([]);setPayments([]);setContracts([]);return}
+   const saved=JSON.parse(raw) as {clients?:Client[];projects?:Project[];payments?:Payment[];contracts?:Contract[]}; const map=new Map<string,string>(); const newClients:Client[]=[];
+   for(const c of saved.clients||[]){const {data,error}=await db.from('clients').insert(clientRow(c,uid)).select().single();if(error)throw new Error(error.message);map.set(c.id,data.id);newClients.push(clientFrom(data));}
+   const newProjects:Project[]=[];for(const p of saved.projects||[]){const {data,error}=await db.from('projects').insert({owner_id:uid,client_id:map.get(p.clientId)||null,name:p.name,type:p.type,status:p.status,start_date:dateOrNull(p.startDate),target_launch_date:dateOrNull(p.targetLaunchDate),price:p.price,progress:p.progress,notes:p.notes}).select().single();if(error)throw new Error(error.message);newProjects.push(projectFrom(data));}
+   const newPayments:Payment[]=[];for(const p of saved.payments||[]){const {data,error}=await db.from('payments').insert(paymentRow(p,uid,map.get(p.clientId)||null)).select().single();if(error)throw new Error(error.message);newPayments.push(paymentFrom(data));}
+   const newContracts:Contract[]=[];for(const c of saved.contracts||[]){const {data,error}=await db.from('contracts').insert({owner_id:uid,client_id:map.get(c.clientId)||null,name:c.name,signed_date:dateOrNull(c.signedDate),status:c.status,file_name:c.fileName}).select().single();if(error)throw new Error(error.message);newContracts.push(contractFrom(data));}
+   setClients(newClients);setProjects(newProjects);setPayments(newPayments);setContracts(newContracts);localStorage.removeItem(STORAGE_KEY);
+ }
+ useEffect(()=>{let mounted=true;db.auth.getSession().then(async({data})=>{if(!mounted)return;const u=data.session?.user;if(u?.email?.toLowerCase()===OWNER_EMAIL){setUserId(u.id);try{await loadAll(u.id)}catch(e){setAuthError(e instanceof Error?e.message:'Could not load data')}}setReady(true)});const {data:sub}=db.auth.onAuthStateChange(async(_e,s)=>{if(!mounted)return;const u=s?.user;if(u?.email?.toLowerCase()===OWNER_EMAIL){setUserId(u.id);setReady(false);try{await loadAll(u.id)}catch(e){setAuthError(e instanceof Error?e.message:'Could not load data')}setReady(true)}else{setUserId('');setClients([]);setProjects([]);setPayments([]);setContracts([]);setReady(true)}});return()=>{mounted=false;sub.subscription.unsubscribe()}},[]);
+ async function ownerAuth(e:FormEvent<HTMLFormElement>,mode:'signin'|'signup'){e.preventDefault();setAuthError('');setAuthMsg('');const f=new FormData(e.currentTarget);const email=String(f.get('email')||'').trim().toLowerCase(),password=String(f.get('password')||'');if(email!==OWNER_EMAIL){setAuthError('This tracker is restricted to the owner account.');return}if(password.length<6){setAuthError('Password must be at least 6 characters.');return}const result=mode==='signin'?await db.auth.signInWithPassword({email,password}):await db.auth.signUp({email,password});if(result.error){setAuthError(result.error.message);return}if(mode==='signup'&&!result.data.session)setAuthMsg('Account created. Check your email to confirm it, then sign in.');}
+ if(!ready)return <div style={{minHeight:'100vh',display:'grid',placeItems:'center'}}>Loading tracker…</div>;
+ if(!userId)return <div style={{minHeight:'100vh',display:'grid',placeItems:'center',padding:24,background:'#f6f4ee'}}><div className="panel" style={{width:'min(430px,100%)'}}><h1 style={{marginTop:0}}>TAI Tracker</h1><p className="muted">Sign in to load your permanently saved business data.</p><form onSubmit={e=>ownerAuth(e,'signin')} style={{display:'grid',gap:12}}><label>Email<input name="email" type="email" defaultValue={OWNER_EMAIL}/></label><label>Password<input name="password" type="password" autoComplete="current-password"/></label>{authError&&<div className="error">{authError}</div>}{authMsg&&<div className="badge green">{authMsg}</div>}<button className="btn accent">Sign In</button><button type="button" className="btn ghost" onClick={e=>{const form=(e.currentTarget.closest('form') as HTMLFormElement);ownerAuth({preventDefault:()=>{},currentTarget:form} as unknown as FormEvent<HTMLFormElement>,'signup')}}>First time? Create Owner Account</button></form></div></div>;
+ const syncPaidThrough=async(p:Payment)=>{if(!p.coversThrough||p.amountPaid<=0||!['Hosting','Maintenance','Domain'].includes(p.type))return;const c=clients.find(x=>x.id===p.clientId);if(!c||c.recurringFee<=0||(c.paidThrough&&c.paidThrough>=p.coversThrough))return;await updateClient({...c,paidThrough:p.coversThrough})};
+ async function addClient(c:Client){const {data,error}=await db.from('clients').insert(clientRow(c,userId)).select().single();if(error)throw new Error(error.message);const saved=clientFrom(data);setClients(v=>[saved,...v]);return saved}
+ async function updateClient(c:Client){const {data,error}=await db.from('clients').update(clientRow(c,userId)).eq('id',c.id).select().single();if(error)throw new Error(error.message);setClients(v=>v.map(x=>x.id===c.id?clientFrom(data):x))}
+ async function deleteClient(id:string){const {error}=await db.from('clients').delete().eq('id',id);if(error)throw new Error(error.message);setClients(v=>v.filter(x=>x.id!==id));setProjects(v=>v.map(x=>x.clientId===id?{...x,clientId:''}:x));setPayments(v=>v.map(x=>x.clientId===id?{...x,clientId:''}:x));setContracts(v=>v.map(x=>x.clientId===id?{...x,clientId:''}:x))}
+ async function deleteProject(id:string){const {error}=await db.from('projects').delete().eq('id',id);if(error)throw new Error(error.message);setProjects(v=>v.filter(x=>x.id!==id))}
+ async function addPayment(p:Payment){const {data,error}=await db.from('payments').insert(paymentRow(p,userId)).select().single();if(error)throw new Error(error.message);const saved=paymentFrom(data);setPayments(v=>[saved,...v]);await syncPaidThrough(saved)}
+ async function updatePayment(p:Payment){const {data,error}=await db.from('payments').update(paymentRow(p,userId)).eq('id',p.id).select().single();if(error)throw new Error(error.message);const saved=paymentFrom(data);setPayments(v=>v.map(x=>x.id===p.id?saved:x));await syncPaidThrough(saved)}
+ async function deletePayment(id:string){const {error}=await db.from('payments').delete().eq('id',id);if(error)throw new Error(error.message);setPayments(v=>v.filter(x=>x.id!==id))}
+ async function addContract(c:Contract){const {data,error}=await db.from('contracts').insert({owner_id:userId,client_id:c.clientId||null,name:c.name,signed_date:dateOrNull(c.signedDate),status:c.status,file_name:c.fileName}).select().single();if(error)throw new Error(error.message);setContracts(v=>[contractFrom(data),...v])}
+ async function generatePaymentHistory(client:Client){let target=client;if(!clients.some(c=>c.id===client.id))target=await addClient(client);if(target.recurringFee<=0||!target.startDate||!target.paidThrough)return 0;const start=new Date(`${target.startDate}T00:00:00Z`),end=new Date(`${target.paidThrough}T00:00:00Z`);if(start>end)return 0;const existing=new Set(payments.filter(p=>p.clientId===target.id).map(p=>p.invoice));const rows:Payment[]=[];let y=start.getUTCFullYear(),m=start.getUTCMonth();while(y<end.getUTCFullYear()||(y===end.getUTCFullYear()&&m<=end.getUTCMonth())){const ym=`${y}-${String(m+1).padStart(2,'0')}`,invoice=`REC-${ym}-${target.id}`;if(!existing.has(invoice)){const day=Math.min(28,Math.max(1,target.billingDay||1)),date=`${y}-${String(m+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;rows.push({id:'',clientId:target.id,invoice,type:'Maintenance',amountCharged:target.recurringFee,amountPaid:target.recurringFee,paymentDate:date,dueDate:date,method:'Historical',status:'Paid',coversThrough:date})}m++;if(m>11){m=0;y++}}if(!rows.length)return 0;const {data,error}=await db.from('payments').insert(rows.map(p=>paymentRow(p,userId))).select();if(error)throw new Error(error.message);setPayments(v=>[...(data||[]).map(paymentFrom),...v]);return rows.length}
+ const value=useMemo(()=>{const totalIncome=payments.reduce((s,p)=>s+p.amountPaid,0),outstanding=payments.reduce((s,p)=>s+Math.max(0,p.amountCharged-p.amountPaid),0),recurring=clients.reduce((s,c)=>s+c.recurringFee,0),activeClients=clients.filter(c=>c.status!=='Lead'&&c.status!=='Completed').length;return{clients,projects,payments,contracts,activities:seedActivities,addClient,updateClient,deleteClient,deleteProject,addPayment,updatePayment,deletePayment,generatePaymentHistory,addContract,signOut:async()=>{await db.auth.signOut()},totalIncome,outstanding,recurring,activeClients}},[clients,projects,payments,contracts,userId]);
+ return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }
-function normalizeClient(client:Client):Client{
-  const billingDay=Math.min(28,Math.max(1,client.billingDay||Number(client.paidThrough?.slice(8,10))||1));
-  return {...client,billingDay,nextDueDate:client.recurringFee>0&&client.paidThrough?nextDueFromPaidThrough(client.paidThrough,billingDay):client.nextDueDate||''};
-}
-function historyRowsForClient(client:Client,existing:Payment[]):Payment[]{
-  if(client.recurringFee<=0||!client.startDate||!client.paidThrough) return [];
-  const start=new Date(`${client.startDate}T00:00:00Z`);
-  const end=new Date(`${client.paidThrough}T00:00:00Z`);
-  if(Number.isNaN(start.getTime())||Number.isNaN(end.getTime())||start>end) return [];
-  const safeDay=Math.min(28,Math.max(1,client.billingDay||1));
-  const existingInvoices=new Set(existing.map(p=>p.invoice));
-  const rows:Payment[]=[];
-  let year=start.getUTCFullYear(),month=start.getUTCMonth();
-  const endYear=end.getUTCFullYear(),endMonth=end.getUTCMonth();
-  while(year<endYear||(year===endYear&&month<=endMonth)){
-    const ym=`${year}-${String(month+1).padStart(2,'0')}`;
-    const invoice=`REC-${ym}-${client.id}`;
-    if(!existingInvoices.has(invoice)){
-      const date=new Date(Date.UTC(year,month,safeDay));
-      const paymentDate=`${date.getUTCFullYear()}-${String(date.getUTCMonth()+1).padStart(2,'0')}-${String(safeDay).padStart(2,'0')}`;
-      rows.push({id:`hist-${client.id}-${ym}`,clientId:client.id,invoice,type:'Maintenance',amountCharged:client.recurringFee,amountPaid:client.recurringFee,paymentDate,dueDate:paymentDate,method:'Historical',status:'Paid',coversThrough:paymentDate});
-      existingInvoices.add(invoice);
-    }
-    month+=1;
-    if(month>11){month=0;year+=1}
-  }
-  return rows;
-}
-
-export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [clients, setClients] = useState<Client[]>(seedClients);
-  const [projects, setProjects] = useState<Project[]>(seedProjects);
-  const [payments, setPayments] = useState<Payment[]>(seedPayments);
-  const [contracts, setContracts] = useState<Contract[]>(seedContracts);
-  const [storageReady,setStorageReady]=useState(false);
-
-  useEffect(()=>{
-    try{
-      const raw=localStorage.getItem(STORAGE_KEY);
-      if(raw){
-        const saved=JSON.parse(raw) as Partial<StoredData>;
-        if(saved.clients) setClients(saved.clients.map(normalizeClient));
-        if(saved.projects) setProjects(saved.projects);
-        if(saved.payments) setPayments(saved.payments);
-        if(saved.contracts) setContracts(saved.contracts);
-      }
-    }catch(error){console.error('Could not load saved tracker data',error)}
-    setStorageReady(true);
-  },[]);
-
-  useEffect(()=>{
-    if(!storageReady) return;
-    try{localStorage.setItem(STORAGE_KEY,JSON.stringify({clients,projects,payments,contracts} satisfies StoredData))}
-    catch(error){console.error('Could not save tracker data',error)}
-  },[storageReady,clients,projects,payments,contracts]);
-
-  const syncPaidThrough=(payment:Payment)=>{
-    if(!payment.coversThrough||payment.amountPaid<=0||!(payment.type==='Hosting'||payment.type==='Maintenance'||payment.type==='Domain')) return;
-    setClients(v=>v.map(c=>{
-      if(c.id!==payment.clientId||c.recurringFee<=0) return c;
-      if(c.paidThrough&&c.paidThrough>=payment.coversThrough!) return c;
-      return normalizeClient({...c,paidThrough:payment.coversThrough});
-    }));
-  };
-
-  const value = useMemo(() => {
-    const totalIncome = payments.reduce((sum, p) => sum + p.amountPaid, 0);
-    const outstanding = payments.reduce((sum, p) => sum + Math.max(0, p.amountCharged - p.amountPaid), 0);
-    const recurring = clients.reduce((sum, c) => sum + c.recurringFee, 0);
-    const activeClients = clients.filter(c => c.status !== 'Lead' && c.status !== 'Completed').length;
-    return { clients, projects, payments, contracts, activities: seedActivities,
-      addClient: (client: Client) => setClients(v => [normalizeClient(client), ...v]),
-      updateClient: (client: Client) => setClients(v => v.map(c => c.id === client.id ? normalizeClient(client) : c)),
-      deleteClient: (clientId: string) => setClients(v => v.filter(c => c.id !== clientId)),
-      deleteProject: (projectId: string) => setProjects(v => v.filter(p => p.id !== projectId)),
-      addPayment: (payment: Payment) => {setPayments(v => [payment, ...v]);syncPaidThrough(payment)},
-      updatePayment: (payment: Payment) => {setPayments(v => v.map(p => p.id === payment.id ? payment : p));syncPaidThrough(payment)},
-      deletePayment: (paymentId: string) => setPayments(v => v.filter(p => p.id !== paymentId)),
-      generatePaymentHistory: (client: Client) => {const normalized=normalizeClient(client);const rows=historyRowsForClient(normalized,payments);if(rows.length)setPayments(v=>[...rows,...v]);return rows.length},
-      addContract: (contract: Contract) => setContracts(v => [contract, ...v]),
-      totalIncome, outstanding, recurring, activeClients };
-  }, [clients, projects, payments, contracts]);
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
-}
-export function useAppData() {
-  const value = useContext(AppContext);
-  if (!value) throw new Error('useAppData must be used inside AppProvider');
-  return value;
-}
+export function useAppData(){const v=useContext(AppContext);if(!v)throw new Error('useAppData must be used inside AppProvider');return v}

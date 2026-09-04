@@ -18,13 +18,23 @@ npm run build
 npm start
 ```
 
-## Vercel
+## Vercel + Supabase
 
-Import this GitHub repository into Vercel and deploy it as a Next.js project with the default build settings. Version 1 uses in-memory sample/session data only, so no environment variables are required yet.
+The tracker uses Supabase for authenticated permanent storage.
 
-## Version 1 behavior
+Required environment variables in Vercel for Production, Preview, and Development:
+
+```text
+NEXT_PUBLIC_SUPABASE_URL
+NEXT_PUBLIC_SUPABASE_ANON_KEY
+```
+
+Do not commit a Supabase service-role key. The browser uses the publishable/anon key together with Supabase Auth and Row Level Security.
+
+## Current behavior
 
 - Dashboard, clients, projects, payments, contracts, files, reports and settings routes are included.
-- Add Client, Create Invoice and Upload Contract update the current browser session.
-- Refreshing resets session changes to the original sample data.
-- Database, authentication and real file storage are planned for Version 2.
+- Client, project, payment, and contract data are stored in Supabase for the authenticated owner.
+- The tracker is restricted to the owner account and database rows are protected by Row Level Security.
+- Existing browser-local tracker data is migrated into Supabase the first time the owner signs in if the database is empty.
+- Dashboard payment totals and year filters use the persisted payment history.

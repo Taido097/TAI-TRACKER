@@ -31,6 +31,8 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY
 
 Do not commit a Supabase service-role key. The browser uses the publishable/anon key together with Supabase Auth and Row Level Security.
 
+Environment variable changes require a new deployment before they are included in the build.
+
 ## Current behavior
 
 - Dashboard, clients, projects, payments, contracts, files, reports and settings routes are included.

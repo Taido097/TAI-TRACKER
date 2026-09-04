@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useMemo, useState } from 'react';
-import { BarChart3, BriefcaseBusiness, CreditCard, FileText, Files, FolderKanban, LayoutDashboard, Menu, Search, Settings, Users, X } from 'lucide-react';
+import { BarChart3, CreditCard, FileText, Files, FolderKanban, LayoutDashboard, Menu, Search, Settings, Users, X } from 'lucide-react';
 import { useAppData } from './app-provider';
 
 const nav = [
@@ -25,7 +25,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const Sidebar = () => <aside className="sidebar">
     <div className="brand"><div className="brand-title">DesignedbyTD</div><div className="brand-sub">BUSINESS TRACKER</div></div>
     <nav>{nav.map(([label,href,Icon]) => <Link key={href} href={href} className={`nav-item ${path===href?'active':''}`} onClick={()=>setOpen(false)}><Icon size={18}/><span>{label}</span></Link>)}</nav>
-    <div className="promo"><BriefcaseBusiness size={22}/><strong>CREATE<br/>BUILD<br/>GROW</strong><small>Websites for real businesses.</small></div>
   </aside>;
   return <div className="app-wrap">
     <div className="desktop-side"><Sidebar/></div>

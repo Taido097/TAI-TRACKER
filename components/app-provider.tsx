@@ -5,7 +5,8 @@ import { Client, Contract, Payment, Project } from '@/lib/types';
 
 type AppContextValue = {
   clients: Client[]; projects: Project[]; payments: Payment[]; contracts: Contract[]; activities: typeof seedActivities;
-  addClient: (client: Client) => void; addPayment: (payment: Payment) => void; addContract: (contract: Contract) => void;
+  addClient: (client: Client) => void; updateClient: (client: Client) => void; deleteClient: (clientId: string) => void;
+  addPayment: (payment: Payment) => void; addContract: (contract: Contract) => void;
   totalIncome: number; outstanding: number; recurring: number; activeClients: number;
 };
 const AppContext = createContext<AppContextValue | null>(null);
@@ -21,6 +22,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const activeClients = clients.filter(c => c.status !== 'Lead' && c.status !== 'Completed').length;
     return { clients, projects, payments, contracts, activities: seedActivities,
       addClient: (client: Client) => setClients(v => [client, ...v]),
+      updateClient: (client: Client) => setClients(v => v.map(c => c.id === client.id ? client : c)),
+      deleteClient: (clientId: string) => setClients(v => v.filter(c => c.id !== clientId)),
       addPayment: (payment: Payment) => setPayments(v => [payment, ...v]),
       addContract: (contract: Contract) => setContracts(v => [contract, ...v]),
       totalIncome, outstanding, recurring, activeClients };

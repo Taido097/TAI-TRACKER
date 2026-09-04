@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useMemo, useState } from 'react';
-import { BarChart3, CreditCard, FileText, Files, FolderKanban, LayoutDashboard, LogOut, Menu, Search, Settings, Users, X } from 'lucide-react';
+import { BarChart3, CreditCard, FileText, Files, FolderKanban, LayoutDashboard, Menu, Search, Settings, Users, X } from 'lucide-react';
 import { useAppData } from './app-provider';
 
 const nav = [
@@ -12,7 +12,7 @@ const nav = [
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const path = usePathname(); const [open,setOpen] = useState(false); const [q,setQ]=useState('');
-  const { clients, projects, payments, signOut } = useAppData();
+  const { clients, projects, payments } = useAppData();
   const results = useMemo(() => {
     if (!q.trim()) return [];
     const s=q.toLowerCase();
@@ -35,7 +35,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="search-wrap"><Search size={18}/><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search clients, projects, invoices..."/>
           {results.length>0 && <div className="search-results">{results.map((r,i)=><Link href={r.href} key={i} onClick={()=>setQ('')}><strong>{r.label}</strong><span>{r.meta}</span></Link>)}</div>}
         </div>
-        <div className="profile"><div className="avatar">TD</div><div><strong>Tai Do</strong><span>Business Owner</span></div><button className="icon-btn" title="Log out" aria-label="Log out" onClick={()=>void signOut()}><LogOut size={17}/></button></div>
+        <div className="profile"><div className="avatar">TD</div><div><strong>Tai Do</strong><span>Business Owner</span></div></div>
       </header>
       <div className="content">{children}</div>
     </main>

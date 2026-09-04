@@ -6,6 +6,7 @@ import { Client, Contract, Payment, Project } from '@/lib/types';
 type AppContextValue = {
   clients: Client[]; projects: Project[]; payments: Payment[]; contracts: Contract[]; activities: typeof seedActivities;
   addClient: (client: Client) => void; updateClient: (client: Client) => void; deleteClient: (clientId: string) => void;
+  deleteProject: (projectId: string) => void;
   addPayment: (payment: Payment) => void; updatePayment: (payment: Payment) => void; deletePayment: (paymentId: string) => void;
   generatePaymentHistory: (client: Client) => number;
   addContract: (contract: Contract) => void;
@@ -27,7 +28,6 @@ function normalizeClient(client:Client):Client{
   const billingDay=Math.min(28,Math.max(1,client.billingDay||Number(client.paidThrough?.slice(8,10))||1));
   return {...client,billingDay,nextDueDate:client.recurringFee>0&&client.paidThrough?nextDueFromPaidThrough(client.paidThrough,billingDay):client.nextDueDate||''};
 }
-function monthKey(date:string){return date.slice(0,7)}
 function historyRowsForClient(client:Client,existing:Payment[]):Payment[]{
   if(client.recurringFee<=0||!client.startDate||!client.paidThrough) return [];
   const start=new Date(`${client.startDate}T00:00:00Z`);
@@ -98,6 +98,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       addClient: (client: Client) => setClients(v => [normalizeClient(client), ...v]),
       updateClient: (client: Client) => setClients(v => v.map(c => c.id === client.id ? normalizeClient(client) : c)),
       deleteClient: (clientId: string) => setClients(v => v.filter(c => c.id !== clientId)),
+      deleteProject: (projectId: string) => setProjects(v => v.filter(p => p.id !== projectId)),
       addPayment: (payment: Payment) => {setPayments(v => [payment, ...v]);syncPaidThrough(payment)},
       updatePayment: (payment: Payment) => {setPayments(v => v.map(p => p.id === payment.id ? payment : p));syncPaidThrough(payment)},
       deletePayment: (paymentId: string) => setPayments(v => v.filter(p => p.id !== paymentId)),
